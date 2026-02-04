@@ -46,7 +46,8 @@ class Strategy:
                  use_candle_patterns: bool = True,
                  use_multi_tf_macd: bool = True,
                  atr_stop_mult: float = 2.0,  # ATR multiplier for stops
-                 atr_target_mult: float = 3.0):  # ATR multiplier for targets
+                 atr_target_mult: float = 3.0,  # ATR multiplier for targets
+                 point_value_usd: float = 0.0):  # USD per 1.0 point (optional)
         self.pamm_min = pamm_min
         self.pamm_max = pamm_max
         self.adx_min = adx_min
@@ -62,6 +63,7 @@ class Strategy:
         # ATR-based risk management
         self.atr_stop_mult = atr_stop_mult
         self.atr_target_mult = atr_target_mult
+        self.point_value_usd = float(point_value_usd)
 
     def _prep(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate all technical indicators"""
@@ -462,4 +464,3 @@ class Strategy:
             return None, None
 
         return stop_loss, target
-
