@@ -1,6 +1,7 @@
 from __future__ import annotations
 from fastapi import APIRouter, Depends
 from datetime import datetime, timezone
+import uuid
 from dateutil import parser as dtparser
 from .models import CandleIn, CandlesIn, PollResponse, HeartbeatIn, FillIn
 from .security import require_api_key
@@ -28,19 +29,15 @@ def _strategy_for_fp():
         use_multi_tf_macd=USE_MULTI_TF_MACD,
         atr_stop_mult=ATR_STOP_MULT,
         atr_target_mult=ATR_TARGET_MULT,
+        point_value_usd=POINT_VALUE_USD,
     )
 
 @router.post("/candles")
-def post_candles(payload: CandleIn | CandlesIn, _=Depends(require_api_key)):
-    # allow single candle or batch
-    candles = payload.candles if isinstance(payload, CandlesIn) else [payload]
+def ingest_candles(payload: CandlesIn, _=Depends(require_api_key)):
+    candles = payload.candles or []
     for c in candles:
-        # Normalize timestamp to ISO (keep as UTC)
-        try:
-            ts = dtparser.isoparse(c.ts).astimezone(timezone.utc).isoformat()
-        except Exception:
-            ts = c.ts
-        db.insert_candle(c.machineId, c.symbol, c.timeframe, ts, c.open, c.high, c.low, c.close, c.volume)
+        ts = dtparser.isoparse(c.ts_utc).astimezone(timezone.utc).isoformat()
+        db.insert_candle(c.machine_id, c.symbol, c.timeframe, ts, c.open, c.high, c.low, c.close, c.volume)
     return {"ok": True, "count": len(candles)}
 
 @router.get("/poll", response_model=PollResponse)
@@ -67,7 +64,7 @@ def poll(machineId: str, symbol: str = "MBT", _=Depends(require_api_key)):
     # Always write fingerprint (even FLAT)
     fp_strat = _strategy_for_fp()
     try:
-        fp = build_fingerprint(machineId, symbol, frames, fp_strat, signal, stop_price, reason)
+        fp = build_fingerprint(machineId, symbol, frames, fp_strat, signal, stop_price, reason, decision_id=uuid.uuid4().hex)
         db.insert_fingerprint(**fp)
     except Exception as e:
         # Still respond; just record reason
@@ -79,97 +76,48 @@ def poll(machineId: str, symbol: str = "MBT", _=Depends(require_api_key)):
     try:
         meta = rd.meta
     except Exception:
-        meta = None
-    return PollResponse(mode=st.mode, signal=signal, stop_price=stop_price, reason=reason, meta=meta)
+        meta = {}
+
+    return PollResponse(
+        mode=BOT_MODE,
+        signal=signal,
+        stop_price=stop_price,
+        reason=reason,
+        meta=meta,
+    )
 
 @router.post("/heartbeat")
-def heartbeat(hb: HeartbeatIn, _=Depends(require_api_key)):
-    STORE.heartbeat(hb.machineId)
-    db.log_heartbeat(hb.machineId, hb.ts_utc)
+def heartbeat(payload: HeartbeatIn, _=Depends(require_api_key)):
+    STORE.heartbeat(payload.machine_id, payload.mode)
     return {"ok": True}
 
 @router.post("/fills")
-def fills(fill: FillIn, _=Depends(require_api_key)):
-    db.log_fill(fill.machineId, fill.symbol, fill.side, fill.qty, fill.price, fill.ts_utc, fill.notes)
-
-    # Best-effort position state tracking.
-    # Convention:
-    # - First fill after FLAT is considered an entry.
-    # - Next opposite-side fill that reduces/closes will be treated as exit.
-    # This works well for 1-contract entry/exit workflows.
-    pos = STORE.get_position(fill.machineId, fill.symbol)
-    side = "long" if fill.side == "BUY" else "short"
-    now_utc = datetime.now(timezone.utc)
-
-    if not pos.open:
-        # Entry
-        pos.side = side
-        pos.entry_price = float(fill.price)
-        pos.qty = float(fill.qty)
-        pos.entry_time_utc = now_utc
-        # Keep existing suggested stop if any; Ninja can also set it locally.
-        pos.open = True
-        STORE.set_position(fill.machineId, fill.symbol, pos)
-    else:
-        # Potential exit or add-on.
-        if pos.side and side != pos.side:
-            # Treat as close
-            d = 1 if pos.side == "long" else -1
-            pnl_pts = (float(fill.price) - float(pos.entry_price)) * d
-            pnl_usd_est = pnl_pts * float(pos.qty or 1.0) * float(POINT_VALUE_USD)
-            STORE.add_realized_pnl(fill.machineId, pnl_usd_est)
-
-            # Track consecutive losses (for 3-loss kill switch)
-            if pnl_usd_est < 0:
-                STORE.increment_consecutive_losses(fill.machineId)
-            else:
-                STORE.reset_consecutive_losses(fill.machineId)
-
-            # If exit is likely a stop-out (price beyond stop), start cooldown timer
-            if pos.stop_price > 0:
-                if (d == 1 and float(fill.price) <= pos.stop_price) or (d == -1 and float(fill.price) >= pos.stop_price):
-                    pos.last_sl_time_utc = now_utc
-            
-            # Check for manual exit flag - apply cooldown for manual exits too
-            if fill.notes and any(x in fill.notes.upper() for x in ["MANUAL", "TIMEOUT", "REVERSAL"]):
-                pos.last_sl_time_utc = now_utc
-
-            pos.open = False
-            STORE.set_position(fill.machineId, fill.symbol, pos)
-        else:
-            # Same direction fill; treat as add-on, update avg entry price (simple weighted)
-            new_qty = float(pos.qty) + float(fill.qty)
-            if new_qty > 0:
-                pos.entry_price = (float(pos.entry_price) * float(pos.qty) + float(fill.price) * float(fill.qty)) / new_qty
-                pos.qty = new_qty
-            STORE.set_position(fill.machineId, fill.symbol, pos)
+def fills(payload: FillIn, _=Depends(require_api_key)):
+    # record fill
+    db.insert_fill(
+        ts_utc=payload.ts_utc,
+        machine_id=payload.machine_id,
+        symbol=payload.symbol,
+        side=payload.side,
+        qty=payload.qty,
+        price=payload.price,
+        order_id=payload.order_id,
+        client_order_id=payload.client_order_id,
+        meta=payload.meta or {},
+    )
+    # update in-memory position state
+    STORE.apply_fill(payload)
     return {"ok": True}
 
 @router.get("/status")
 def status(_=Depends(require_api_key)):
     st = STORE.get()
-    hb = {k: v.isoformat() for k, v in st.last_heartbeat_utc_by_machine.items()}
-    # Summarize open positions for quick debugging
-    open_positions = {}
-    for k, pos in st.positions.items():
-        if pos.open:
-            open_positions[k] = {
-                "side": pos.side,
-                "entry_price": pos.entry_price,
-                "stop_price": pos.stop_price,
-                "qty": pos.qty,
-                "entry_time_utc": pos.entry_time_utc.isoformat() if pos.entry_time_utc else None,
-                "last_sl_time_utc": pos.last_sl_time_utc.isoformat() if pos.last_sl_time_utc else None,
-            }
     return {
         "mode": st.mode,
+        "signal": st.last_signal,
+        "stop_price": st.last_stop_price,
+        "reason": st.last_reason,
         "kill_switch": st.kill_switch,
-        "last_signal": st.last_signal,
-        "last_stop_price": st.last_stop_price,
-        "last_reason": st.last_reason,
-        "heartbeats": hb,
-        "open_positions": open_positions,
-        "daily_realized_pnl_by_machine": st.daily_realized_pnl_by_machine,
         "kill_switch_triggered_by_machine": st.kill_switch_triggered_by_machine,
         "consecutive_losses_by_machine": st.consecutive_losses_by_machine,
     }
