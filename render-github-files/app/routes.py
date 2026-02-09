@@ -234,7 +234,6 @@ def status(_=Depends(require_api_key)):
     return {
         "mode": st.mode,
         "kill_switch": st.kill_switch,
-        "last_decision": st.last_decision,
         "last_stop_price": st.last_stop_price,
         "last_reason": st.last_reason,
         "last_heartbeat_utc": st.last_heartbeat_utc,
