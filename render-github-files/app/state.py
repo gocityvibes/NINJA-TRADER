@@ -1,6 +1,6 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Dict, Optional
 
 @dataclass
@@ -22,7 +22,7 @@ class StateStore:
         self._positions: Dict[str, PositionState] = {}
         self.kill_switch: bool = False
         self.daily_realized_pnl_usd: float = 0.0
-        self.mode: str = "PAPER"  # PAPER | LIVE
+        self.mode: str = "PAPER"
     
     def _key(self, machine_id: str, symbol: str) -> str:
         return f"{machine_id}:{symbol}"
@@ -44,6 +44,10 @@ class StateStore:
     def set_mode(self, mode: str):
         """Set bot mode (PAPER | LIVE)."""
         self.mode = mode.upper()
+    
+    def set_kill(self, enabled: bool):
+        """Set kill switch."""
+        self.kill_switch = bool(enabled)
 
 
 STORE = StateStore()
