@@ -21,12 +21,22 @@ class StateStore:
 
     def __init__(self):
         self._positions: Dict[str, PositionState] = {}
+
+        # Global controls / status
         self.kill_switch: bool = False
         self.daily_realized_pnl_usd: float = 0.0
         self.mode: str = "PAPER"
 
+        # PATCH: last decision snapshot (used by routes.py)
+        self.last_signal: str = "FLAT"          # "LONG" | "SHORT" | "FLAT"
+        self.last_stop_price: float = 0.0
+        self.last_reason: str = ""
+        self.last_decision_time_utc: Optional[datetime] = None
+
     def _key(self, machine_id: str, symbol: str) -> str:
         return f"{machine_id}:{symbol}"
+
+    # ---------- position handling ----------
 
     def get_position(self, machine_id: str, symbol: str) -> PositionState:
         k = self._key(machine_id, symbol)
@@ -42,6 +52,8 @@ class StateStore:
         if k in self._positions:
             self._positions[k] = PositionState()
 
+    # ---------- global state ----------
+
     def set_mode(self, mode: str):
         """Set bot mode (PAPER | LIVE)."""
         self.mode = mode.upper()
@@ -50,22 +62,42 @@ class StateStore:
         """Set kill switch."""
         self.kill_switch = bool(enabled)
 
+    # ---------- PATCH: decision handling expected by routes.py ----------
+
+    def set_decision(self, signal: str, stop_price: float, reason: str = ""):
+        """
+        PATCH: routes.py calls STORE.set_decision(signal, stop_price, reason)
+
+        Stores the most recent decision so /poll can return it and/or other
+        parts of the app can reference it.
+        """
+        self.last_signal = (signal or "FLAT").upper()
+        try:
+            self.last_stop_price = float(stop_price or 0.0)
+        except Exception:
+            self.last_stop_price = 0.0
+        self.last_reason = reason or ""
+        self.last_decision_time_utc = datetime.utcnow()
+
+    # ---------- compatibility layer ----------
+
     def get(self):
         """
-        PATCH: routes.py expects STORE.get() to return an object with attributes
+        routes.py expects STORE.get() to return an object with attributes
         like st.kill_switch (NOT a dict).
         """
         return self
 
     def snapshot(self, machine_id: Optional[str] = None, symbol: Optional[str] = None) -> dict:
-        """
-        Optional: JSON-safe snapshot if you ever want to return dict state.
-        Not used by routes.py attribute access.
-        """
+        """Optional: JSON-safe snapshot."""
         out = {
             "kill_switch": self.kill_switch,
             "daily_realized_pnl_usd": self.daily_realized_pnl_usd,
             "mode": self.mode,
+            "last_signal": self.last_signal,
+            "last_stop_price": self.last_stop_price,
+            "last_reason": self.last_reason,
+            "last_decision_time_utc": self.last_decision_time_utc.isoformat() if self.last_decision_time_utc else None,
         }
         if machine_id and symbol:
             p = self.get_position(machine_id, symbol)
