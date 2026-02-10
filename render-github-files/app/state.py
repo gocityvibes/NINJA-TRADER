@@ -21,18 +21,12 @@ class StateStore:
 
     def __init__(self):
         self._positions: Dict[str, PositionState] = {}
-
-        # Global controls
         self.kill_switch: bool = False
         self.daily_realized_pnl_usd: float = 0.0
         self.mode: str = "PAPER"
 
-    # ---------- internal helpers ----------
-
     def _key(self, machine_id: str, symbol: str) -> str:
         return f"{machine_id}:{symbol}"
-
-    # ---------- position handling ----------
 
     def get_position(self, machine_id: str, symbol: str) -> PositionState:
         k = self._key(machine_id, symbol)
@@ -48,8 +42,6 @@ class StateStore:
         if k in self._positions:
             self._positions[k] = PositionState()
 
-    # ---------- global state ----------
-
     def set_mode(self, mode: str):
         """Set bot mode (PAPER | LIVE)."""
         self.mode = mode.upper()
@@ -58,24 +50,23 @@ class StateStore:
         """Set kill switch."""
         self.kill_switch = bool(enabled)
 
-    # ---------- compatibility layer ----------
-
-    def get(
-        self,
-        machine_id: Optional[str] = None,
-        symbol: Optional[str] = None,
-    ) -> dict:
+    def get(self):
         """
-        Snapshot state for /poll.
-        Compatible with routes.py and server.py.
+        PATCH: routes.py expects STORE.get() to return an object with attributes
+        like st.kill_switch (NOT a dict).
         """
+        return self
 
+    def snapshot(self, machine_id: Optional[str] = None, symbol: Optional[str] = None) -> dict:
+        """
+        Optional: JSON-safe snapshot if you ever want to return dict state.
+        Not used by routes.py attribute access.
+        """
         out = {
             "kill_switch": self.kill_switch,
             "daily_realized_pnl_usd": self.daily_realized_pnl_usd,
             "mode": self.mode,
         }
-
         if machine_id and symbol:
             p = self.get_position(machine_id, symbol)
             out["position"] = {
@@ -87,9 +78,7 @@ class StateStore:
                 "entry_time_utc": p.entry_time_utc.isoformat() if p.entry_time_utc else None,
                 "last_sl_time_utc": p.last_sl_time_utc.isoformat() if p.last_sl_time_utc else None,
             }
-
         return out
 
 
-# Singleton store
 STORE = StateStore()
