@@ -5,6 +5,7 @@ from .strategy_logic import Strategy
 from .config import (
     PAMM_MIN, PAMM_MAX, USE_VWAP, USE_REGIME_FILTER, USE_CANDLE_PATTERNS, USE_MULTI_TF_MACD,
     ATR_STOP_MULT, ATR_TARGET_MULT,
+    REL_VOL_MIN, REL_VOL_MAX,
 )
 from .candles import load_frames
 
@@ -18,6 +19,8 @@ def _make_strategy() -> Strategy:
         use_multi_tf_macd=USE_MULTI_TF_MACD,
         atr_stop_mult=ATR_STOP_MULT,
         atr_target_mult=ATR_TARGET_MULT,
+        rel_vol_min=REL_VOL_MIN,
+        rel_vol_max=REL_VOL_MAX,
     )
 
 def decide(symbol: str) -> Tuple[str, float, str, dict]:
