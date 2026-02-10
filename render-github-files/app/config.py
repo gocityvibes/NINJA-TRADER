@@ -61,12 +61,12 @@ MIN_STOP_MOVE_PTS = float(os.getenv("MIN_STOP_MOVE_PTS", "0.25"))
 MAX_STOP_TIGHTEN_PER_POLL_PTS = float(os.getenv("MAX_STOP_TIGHTEN_PER_POLL_PTS", "2000"))
 
 # Automatic kill switch based on daily realized P&L (USD). Requires Ninja to POST fills.
-# FINAL CLEAN SPEC: 3 losing trades OR any single -$5 trade → stop
+# 3 losing trades at $5 each = $15 max daily loss
 ENABLE_AUTO_KILL_SWITCH = os.getenv("ENABLE_AUTO_KILL_SWITCH", "true").lower() in ("1","true","yes")
-MAX_DAILY_LOSS_USD = float(os.getenv("MAX_DAILY_LOSS_USD", "7.50"))  # 3 trades × $2.50 = $7.50 max
+MAX_DAILY_LOSS_USD = float(os.getenv("MAX_DAILY_LOSS_USD", "15.00"))  # 3 trades × $5 = $15 max
 
 # Futures sizing helpers (optional; used only for P&L estimates on Render)
-POINT_VALUE_USD = float(os.getenv("POINT_VALUE_USD", "5.0"))  # MBT = $5/point
+POINT_VALUE_USD = float(os.getenv("POINT_VALUE_USD", "0.10"))  # MBT = $0.10/point (Micro Bitcoin)
 
 # DB
 DB_PATH = os.getenv("DB_PATH", "bot.db")
