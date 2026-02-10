@@ -10,25 +10,18 @@ RTH_START = os.getenv("RTH_START", "08:30")
 RTH_END   = os.getenv("RTH_END",   "16:00")
 
 # Strategy thresholds (defaults loaded from your settings_live.py values)
-PAMM_MIN = float(os.getenv("PAMM_MIN", "60.0"))
+PAMM_MIN = float(os.getenv("PAMM_MIN", "80.0"))
 PAMM_MAX = float(os.getenv("PAMM_MAX", "130.0"))
 
 # ATR multipliers
 ATR_STOP_MULT   = float(os.getenv("ATR_STOP_MULT", "1.5"))
 ATR_TARGET_MULT = float(os.getenv("ATR_TARGET_MULT", "3.0"))
 
-# Elite filter thresholds
-ADX_MIN = float(os.getenv("ADX_MIN", "0.0"))  # Set to 0 to disable, 22+ for strong trends
-REL_VOL_MIN = float(os.getenv("REL_VOL_MIN", "0.0"))  # Set to 0 to disable, 1.2+ for high volume
-REL_VOL_MAX = float(os.getenv("REL_VOL_MAX", "999.0"))
-RSI_LONG_MIN = float(os.getenv("RSI_LONG_MIN", "0.0"))
-RSI_SHORT_MAX = float(os.getenv("RSI_SHORT_MAX", "100.0"))
-
 # Elite filter toggles
-USE_VWAP = os.getenv("USE_VWAP", "false").lower() in ("1","true","yes")
-USE_REGIME_FILTER = os.getenv("USE_REGIME_FILTER", "false").lower() in ("1","true","yes")
-USE_CANDLE_PATTERNS = os.getenv("USE_CANDLE_PATTERNS", "false").lower() in ("1","true","yes")
-USE_MULTI_TF_MACD = os.getenv("USE_MULTI_TF_MACD", "false").lower() in ("1","true","yes")
+USE_VWAP = os.getenv("USE_VWAP", "true").lower() in ("1","true","yes")
+USE_REGIME_FILTER = os.getenv("USE_REGIME_FILTER", "true").lower() in ("1","true","yes")
+USE_CANDLE_PATTERNS = os.getenv("USE_CANDLE_PATTERNS", "true").lower() in ("1","true","yes")
+USE_MULTI_TF_MACD = os.getenv("USE_MULTI_TF_MACD", "true").lower() in ("1","true","yes")
 
 # Risk controls
 COOLDOWN_SECONDS = int(os.getenv("COOLDOWN_SECONDS", "0"))
