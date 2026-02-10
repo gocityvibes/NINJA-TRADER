@@ -234,7 +234,15 @@ def status(_=Depends(require_api_key)):
     return {
         "mode": st.mode,
         "kill_switch": st.kill_switch,
+        "last_signal": st.last_signal,
         "last_stop_price": st.last_stop_price,
         "last_reason": st.last_reason,
-        "last_heartbeat_utc": st.last_heartbeat_utc,
     }
+
+
+@router.post("/reset-kill-switch")
+def reset_kill_switch(machineId: str, _=Depends(require_api_key)):
+    """Reset the auto kill switch for a specific machine."""
+    STORE.set_kill_triggered(machineId, False)
+    STORE.reset_consecutive_losses(machineId)
+    return {"ok": True, "message": f"Kill switch reset for {machineId}"}
