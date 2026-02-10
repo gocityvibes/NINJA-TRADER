@@ -144,7 +144,9 @@ def decide_with_runtime(machine_id: str, symbol: str) -> Tuple[RuntimeDecision, 
         price = float(frames["df5"].iloc[-1]["close"])
         direction = 1 if sig.side == "buy" else -1
         # FIXED 50-POINT HARD STOP
-        stop_loss = price - (50.0 * direction)
+        # For LONG: stop is 50 points BELOW entry (price - 50)
+        # For SHORT: stop is 50 points ABOVE entry (price + 50)
+        stop_loss = price + (50.0 * -direction)  # Flip direction for stop placement
 
         return RuntimeDecision("LONG" if sig.side == "buy" else "SHORT", float(stop_loss), sig.reason, {"runtime": False}), frames
 
@@ -188,7 +190,9 @@ def decide_with_runtime(machine_id: str, symbol: str) -> Tuple[RuntimeDecision, 
 
         direction = 1 if sig.side == "buy" else -1
         # FIXED 50-POINT HARD STOP
-        stop_loss = price - (50.0 * direction)
+        # For LONG: stop is 50 points BELOW entry (price - 50)
+        # For SHORT: stop is 50 points ABOVE entry (price + 50)
+        stop_loss = price + (50.0 * -direction)  # Flip direction for stop placement
 
         # Save suggested position state (will be confirmed by fill)
         pos.side = "long" if sig.side == "buy" else "short"
