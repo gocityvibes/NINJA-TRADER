@@ -217,12 +217,8 @@ def decide_with_runtime(machine_id: str, symbol: str) -> Tuple[RuntimeDecision, 
     meta["pnl_pts"] = _pnl_points(pos, price)
     meta["pnl_usd_est"] = meta["pnl_pts"] * float(POINT_VALUE_USD) * float(pos.qty or 1.0)
 
-    # 0) Catastrophic single-trade loss check (ANY trade -$5.00 → kill immediately)
-    if meta["pnl_usd_est"] <= -5.00:
-        pos.open = False
-        STORE.set_position(machine_id, symbol, pos)
-        STORE.set_kill_triggered(machine_id, True)
-        return RuntimeDecision("FLAT", 0.0, f"KILL_SWITCH_SINGLE_LOSS pnl=${meta['pnl_usd_est']:.2f}", meta), frames
+    # REMOVED: Catastrophic single-trade loss check (was too aggressive)
+    # Only use 3-loss rule and daily max loss instead
 
     # 1) Stop hit detection (best-effort; Ninja's server-side stop should still be primary)
     # 1) Stop hit detection (best-effort; Ninja's server-side stop is primary)
