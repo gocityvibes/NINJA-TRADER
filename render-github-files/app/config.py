@@ -17,8 +17,8 @@ PAMM_MAX = float(os.getenv("PAMM_MAX", "130.0"))
 ATR_STOP_MULT   = float(os.getenv("ATR_STOP_MULT", "1.5"))
 ATR_TARGET_MULT = float(os.getenv("ATR_TARGET_MULT", "3.0"))
 
-# Volume (RelVol) gate (anti-chop)
-REL_VOL_MIN = float(os.getenv("REL_VOL_MIN", "0.0"))
+# Volume (RelVol) gate (anti-chop) - controlled by Render ENV
+REL_VOL_MIN = float(os.getenv("REL_VOL_MIN", "0.8"))
 REL_VOL_MAX = float(os.getenv("REL_VOL_MAX", "99.0"))
 
 # Elite filter toggles
