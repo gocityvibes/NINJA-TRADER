@@ -65,32 +65,32 @@ def _pnl_points(pos: PositionState, price: float) -> float:
 
 def _calc_trailing_stop(pos: PositionState, price: float) -> Tuple[float, str] | Tuple[None, str]:
     """Return (new_stop, ladder_reason) or (None, reason) if no update.
-
-    4-Level Ladder (FINAL CLEAN SPEC):
-    +50 pts  → stop at +20  (30 pts trail)
-    +75 pts  → stop at +40  (35 pts trail)
-    +100 pts → stop at +60  (40 pts trail)
-    +150 pts → stop at +100 (50 pts trail)
+    
+    NEW TRAILING LADDER:
+    +150 pts → stop at +50   (100 pts trail)
+    +200 pts → stop at +100  (100 pts trail)
+    +300 pts → stop at +150  (150 pts trail)
+    After +300 pts → always trail 150 pts behind current price
     """
     pnl_pts = _pnl_points(pos, price)
 
-    # No trailing until +50 pts
-    if pnl_pts < 50.0:
+    # No trailing until +150 pts
+    if pnl_pts < 150.0:
         return None, f"NO_TRAIL_YET pnl_pts={pnl_pts:.2f}"
 
     # Pick ladder offset based on gain
-    if 50.0 <= pnl_pts < 75.0:
-        offset = 30.0  # +50 → stop at +20
+    if 150.0 <= pnl_pts < 200.0:
+        # +150 → stop at +50 (trail 100 pts)
+        offset = 100.0
         lvl = "L1"
-    elif 75.0 <= pnl_pts < 100.0:
-        offset = 35.0  # +75 → stop at +40
+    elif 200.0 <= pnl_pts < 300.0:
+        # +200 → stop at +100 (trail 100 pts)
+        offset = 100.0
         lvl = "L2"
-    elif 100.0 <= pnl_pts < 150.0:
-        offset = 40.0  # +100 → stop at +60
+    else:  # >= 300.0
+        # +300+ → stop at +150+ (trail 150 pts constantly)
+        offset = 150.0
         lvl = "L3"
-    else:  # >= 150.0
-        offset = 50.0  # +150 → stop at +100
-        lvl = "L4"
 
     d = _position_dir(pos)
     # Trail behind current price by offset
@@ -120,73 +120,159 @@ def decide_with_runtime(machine_id: str, symbol: str) -> Tuple[RuntimeDecision, 
     """Main decision function used by /poll.
 
     Returns (RuntimeDecision, frames).
+
+    Behavior:
+    - If no open position, behaves like entry engine (LONG/SHORT/FLAT + initial stop)
+    - If open position, manages:
+        - early exit on PAMM drop
+        - reversal detection (FLIP)
+        - trailing stop ladder (stop_price updates)
+        - stop-hit detection (best effort)
+        - cooldown after stop-hit (blocks entries)
+        - automatic kill switch (requires fills)
     """
-    # Kill switch (hard stop)
-    if STORE.kill_switch:
-        return RuntimeDecision("FLAT", 0.0, "KILL_SWITCH", {"runtime": True}), {}
+
+    # If disabled, fall back to entry-only behavior (original /poll)
+    if not RUNTIME_MANAGER_ENABLED:
+        frames = load_frames(symbol)
+        # Not enough candles -> FLAT
+        if any(len(frames[k]) < 50 for k in ("df1", "df5", "df15", "df30")):
+            return RuntimeDecision("FLAT", 0.0, "INSUFFICIENT_MULTI_TF_CANDLES", {"runtime": False}), frames
+
+        strat = _make_strategy()
+        sig = strat.decide(frames)
+        if sig.side == "flat":
+            return RuntimeDecision("FLAT", 0.0, sig.reason, {"runtime": False}), frames
+
+        price = float(frames["df5"].iloc[-1]["close"])
+        direction = 1 if sig.side == "buy" else -1
+        # FIXED 50-POINT HARD STOP
+        # For LONG: stop is 50 points BELOW entry (price - 50)
+        # For SHORT: stop is 50 points ABOVE entry (price + 50)
+        stop_loss = price + (50.0 * -direction)  # Flip direction for stop placement
+
+        return RuntimeDecision("LONG" if sig.side == "buy" else "SHORT", float(stop_loss), sig.reason, {"runtime": False}), frames
 
     frames = load_frames(symbol)
+
+    # Not enough candles -> FLAT
+    if any(len(frames[k]) < 50 for k in ("df1", "df5", "df15", "df30")):
+        return RuntimeDecision("FLAT", 0.0, "INSUFFICIENT_MULTI_TF_CANDLES", {"runtime": False}), frames
+
+    st = STORE.get()
     pos = STORE.get_position(machine_id, symbol)
 
-    # If runtime manager disabled, fall back to base engine decision
-    strat = _make_strategy()
-    sig = strat.decide(frames)
-
-    # If we are flat, consider new entry
-    if not pos.open:
-        # Cooldown after stop hit
-        if COOLDOWN_SECONDS > 0 and pos.last_sl_time_utc:
-            if datetime.now(timezone.utc) - pos.last_sl_time_utc < timedelta(seconds=COOLDOWN_SECONDS):
-                remaining = int((timedelta(seconds=COOLDOWN_SECONDS) - (datetime.now(timezone.utc) - pos.last_sl_time_utc)).total_seconds())
-                return RuntimeDecision("FLAT", 0.0, f"COOLDOWN remaining_s={remaining}", {"runtime": True}), frames
-
-        if sig.side == "flat":
-            return RuntimeDecision("FLAT", 0.0, sig.reason, {"runtime": True}), frames
-
-        # Compute suggested stop from ATR
-        last_close = float(frames["df5"].iloc[-1]["close"])
-        direction = 1 if sig.side == "buy" else -1
-        stop_loss, _target = strat.get_atr_stops_targets(frames, entry_price=last_close, direction=direction)
-        if stop_loss is None:
-            return RuntimeDecision("FLAT", 0.0, "ATR_INVALID_BLOCKING_TRADE", {"runtime": True}), frames
-
-        return RuntimeDecision(
-            "LONG" if sig.side == "buy" else "SHORT",
-            float(stop_loss),
-            sig.reason,
-            {"runtime": True, "pamm": float(compute_pamm_now(frames)), "pending_entry": True}
-        ), frames
-
-    # In-position: HOLD unless trailing/early-exit triggers
-    # Current market price proxy
-    price = float(frames["df5"].iloc[-1]["close"])
-    pnl_pts = _pnl_points(pos, price)
-    pnl_usd_est = pnl_pts * (POINT_VALUE_USD / 1.0)
-
-    # Auto kill switch check (optional)
+    # Automatic kill switch (daily realized P&L)
     if ENABLE_AUTO_KILL_SWITCH:
-        if STORE.daily_realized_pnl_usd <= -abs(MAX_DAILY_LOSS_USD):
-            STORE.kill_switch = True
-            return RuntimeDecision("FLAT", 0.0, "KILL_SWITCH_AUTO", {"runtime": True}), frames
+        realized = STORE.get_realized_pnl(machine_id)
+        if realized <= -abs(MAX_DAILY_LOSS_USD):
+            STORE.set_kill_triggered(machine_id, True)
+    
+    # Check consecutive losses kill switch (3 losses → stop)
+    if STORE.get_consecutive_losses(machine_id) >= 3:
+        STORE.set_kill_triggered(machine_id, True)
+        return RuntimeDecision("FLAT", 0.0, "KILL_SWITCH_3_LOSSES", {"runtime": True, "consecutive_losses": 3}), frames
 
-    # Trailing ladder
-    new_stop, ladder_reason = _calc_trailing_stop(pos, price)
-    if new_stop is not None:
-        return RuntimeDecision(
-            pos.side.upper(),
-            float(new_stop),
-            "HOLD",
-            {"runtime": True, "entry_price": pos.entry_price, "qty": pos.qty,
-             "pnl_pts": float(pnl_pts), "pnl_usd_est": float(pnl_usd_est),
-             "pamm": float(compute_pamm_now(frames)), "trail_reason": ladder_reason}
-        ), frames
+    if STORE.is_kill_triggered(machine_id) or st.kill_switch:
+        return RuntimeDecision("FLAT", 0.0, "KILL_SWITCH_AUTO", {"runtime": True}), frames
 
-    # Default hold (no stop update)
-    return RuntimeDecision(
-        pos.side.upper(),
-        float(pos.stop_price) if pos.stop_price else 0.0,
-        "HOLD",
-        {"runtime": True, "entry_price": pos.entry_price, "qty": pos.qty,
-         "pnl_pts": float(pnl_pts), "pnl_usd_est": float(pnl_usd_est),
-         "pamm": float(compute_pamm_now(frames)), "trail_reason": ladder_reason}
-    ), frames
+    # Cooldown after stop hit
+    if COOLDOWN_SECONDS > 0 and pos.last_sl_time_utc:
+        if datetime.now(timezone.utc) - pos.last_sl_time_utc < timedelta(seconds=COOLDOWN_SECONDS):
+            remaining = int((timedelta(seconds=COOLDOWN_SECONDS) - (datetime.now(timezone.utc) - pos.last_sl_time_utc)).total_seconds())
+            return RuntimeDecision("FLAT", 0.0, f"COOLDOWN remaining_s={remaining}", {"runtime": True, "cooldown_remaining_s": remaining}), frames
+
+    strat = _make_strategy()
+    price = float(frames["df5"].iloc[-1]["close"])
+
+    # If no open position -> entry
+    if not pos.open:
+        sig = strat.decide(frames)
+        if sig.side == "flat":
+            return RuntimeDecision("FLAT", 0.0, sig.reason, {"runtime": True, "pamm": compute_pamm_now(strat, frames)}), frames
+
+        direction = 1 if sig.side == "buy" else -1
+        # FIXED 50-POINT HARD STOP
+        # For LONG: stop is 50 points BELOW entry (price - 50)
+        # For SHORT: stop is 50 points ABOVE entry (price + 50)
+        stop_loss = price + (50.0 * -direction)  # Flip direction for stop placement
+
+        # Save suggested position state (will be confirmed by fill)
+        pos.side = "long" if sig.side == "buy" else "short"
+        pos.entry_price = price  # Suggested - will be updated by actual fill
+        pos.stop_price = float(stop_loss)
+        pos.initial_stop = float(stop_loss)
+        pos.qty = pos.qty or 1.0
+        pos.entry_time_utc = datetime.now(timezone.utc)
+        pos.open = False  # NOT open until fill confirms (FIX)
+        pos.last_stop_update_utc = datetime.now(timezone.utc)
+        STORE.set_position(machine_id, symbol, pos)
+
+        return RuntimeDecision("LONG" if sig.side == "buy" else "SHORT", float(stop_loss), sig.reason, {"runtime": True, "pamm": compute_pamm_now(strat, frames), "pending_entry": True}), frames
+
+    # ----------------
+    # Position management
+    # ----------------
+
+    meta: Dict = {"runtime": True}
+    meta["entry_price"] = pos.entry_price
+    meta["qty"] = pos.qty
+    meta["pnl_pts"] = _pnl_points(pos, price)
+    meta["pnl_usd_est"] = meta["pnl_pts"] * float(POINT_VALUE_USD) * float(pos.qty or 1.0)
+
+    # REMOVED: Catastrophic single-trade loss check (was too aggressive)
+    # Only use 3-loss rule and daily max loss instead
+
+    # 1) Stop hit detection (best-effort; Ninja's server-side stop should still be primary)
+    # 1) Stop hit detection (best-effort; Ninja's server-side stop is primary)
+    # Don't start cooldown here - let fill confirmation handle it
+    d = _position_dir(pos)
+    if pos.stop_price > 0:
+        if (d == 1 and price <= pos.stop_price) or (d == -1 and price >= pos.stop_price):
+            pos.open = False
+            STORE.set_position(machine_id, symbol, pos)
+            return RuntimeDecision("FLAT", 0.0, f"STOP_HIT_RENDER price={price:.2f} stop={pos.stop_price:.2f}", meta), frames
+
+    # 2) PAMM-based EARLY EXIT (ONLY before +150 pts)
+    # After +150 pts, PAMM is IGNORED (strong trends have PAMM dips)
+    pamm_now = compute_pamm_now(strat, frames)
+    meta["pamm"] = pamm_now
+    
+    if meta["pnl_pts"] < 150.0:  # Only check PAMM before +150 pts
+        # Rule 1: PAMM failed to reach 90 within 4 bars (20 minutes on 5m)
+        bars_in_trade = 0
+        if pos.entry_time_utc:
+            bars_in_trade = int((datetime.now(timezone.utc) - pos.entry_time_utc).total_seconds() / 300)  # 5min bars
+        
+        if bars_in_trade >= 4 and pamm_now < 90:
+            pos.open = False
+            STORE.set_position(machine_id, symbol, pos)
+            return RuntimeDecision("FLAT", 0.0, f"EARLY_EXIT_PAMM_WEAK {pamm_now:.1f}<90 after {bars_in_trade} bars", meta), frames
+        
+        # Rule 2: PAMM drops below 70 at any time
+        if pamm_now < 70:
+            pos.open = False
+            STORE.set_position(machine_id, symbol, pos)
+            return RuntimeDecision("FLAT", 0.0, f"EARLY_EXIT_PAMM_FAIL {pamm_now:.1f}<70", meta), frames
+
+    # 3) Reversal detection - FLAT first, let Ninja close
+    current_dir = _current_dir_from_frames(frames)
+    if current_dir != d and pamm_now >= REVERSAL_PAMM_THRESHOLD:
+        pos.open = False
+        # Don't start cooldown here - wait for fill confirmation
+        STORE.set_position(machine_id, symbol, pos)
+        # Return FLAT to close current position (Ninja will re-enter opposite next poll)
+        return RuntimeDecision("FLAT", 0.0, f"REVERSAL_CLOSE PAMM={pamm_now:.1f} dir_flip", meta), frames
+
+    # 4) Trailing stop ladder
+    new_stop, trail_reason = _calc_trailing_stop(pos, price)
+    meta["trail_reason"] = trail_reason
+    if new_stop is not None and new_stop != pos.stop_price:
+        pos.stop_price = float(new_stop)
+        pos.last_stop_update_utc = datetime.now(timezone.utc)
+        STORE.set_position(machine_id, symbol, pos)
+        # Keep signal as current direction, but return updated stop.
+        return RuntimeDecision("LONG" if d == 1 else "SHORT", float(new_stop), trail_reason, meta), frames
+
+    # Otherwise hold
+    return RuntimeDecision("LONG" if d == 1 else "SHORT", float(pos.stop_price or 0.0), "HOLD", meta), frames
