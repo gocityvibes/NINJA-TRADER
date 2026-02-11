@@ -31,7 +31,6 @@ def _strategy_for_fp():
         use_multi_tf_macd=USE_MULTI_TF_MACD,
         atr_stop_mult=ATR_STOP_MULT,
         atr_target_mult=ATR_TARGET_MULT,
-        point_value_usd=POINT_VALUE_USD,
     )
 
 
