@@ -10,16 +10,12 @@ RTH_START = os.getenv("RTH_START", "08:30")
 RTH_END   = os.getenv("RTH_END",   "16:00")
 
 # Strategy thresholds (defaults loaded from your settings_live.py values)
-PAMM_MIN = float(os.getenv("PAMM_MIN", "60.0"))
+PAMM_MIN = float(os.getenv("PAMM_MIN", "80.0"))
 PAMM_MAX = float(os.getenv("PAMM_MAX", "130.0"))
 
 # ATR multipliers
 ATR_STOP_MULT   = float(os.getenv("ATR_STOP_MULT", "1.5"))
 ATR_TARGET_MULT = float(os.getenv("ATR_TARGET_MULT", "3.0"))
-
-# Volume (RelVol) gate (anti-chop) - controlled by Render ENV
-REL_VOL_MIN = float(os.getenv("REL_VOL_MIN", "0.8"))
-REL_VOL_MAX = float(os.getenv("REL_VOL_MAX", "99.0"))
 
 # Elite filter toggles
 USE_VWAP = os.getenv("USE_VWAP", "true").lower() in ("1","true","yes")
@@ -27,8 +23,12 @@ USE_REGIME_FILTER = os.getenv("USE_REGIME_FILTER", "true").lower() in ("1","true
 USE_CANDLE_PATTERNS = os.getenv("USE_CANDLE_PATTERNS", "true").lower() in ("1","true","yes")
 USE_MULTI_TF_MACD = os.getenv("USE_MULTI_TF_MACD", "true").lower() in ("1","true","yes")
 
+# Volume filter (relative volume)
+REL_VOL_MIN = float(os.getenv("REL_VOL_MIN", "0.0"))
+REL_VOL_MAX = float(os.getenv("REL_VOL_MAX", "999.0"))
+
 # Risk controls
-COOLDOWN_SECONDS = int(os.getenv("STOP_COOLDOWN_SEC", os.getenv("COOLDOWN_SECONDS", "0")))
+COOLDOWN_SECONDS = int(os.getenv("COOLDOWN_SECONDS", "600"))  # 10 minutes after stop loss
 KILL_SWITCH = os.getenv("KILL_SWITCH", "0").lower() in ("1","true","yes")
 
 # =====================
@@ -65,12 +65,12 @@ MIN_STOP_MOVE_PTS = float(os.getenv("MIN_STOP_MOVE_PTS", "0.25"))
 MAX_STOP_TIGHTEN_PER_POLL_PTS = float(os.getenv("MAX_STOP_TIGHTEN_PER_POLL_PTS", "2000"))
 
 # Automatic kill switch based on daily realized P&L (USD). Requires Ninja to POST fills.
-# FINAL CLEAN SPEC: 3 losing trades OR any single -$5 trade → stop
+# 3 losing trades at $5 each = $15 max daily loss
 ENABLE_AUTO_KILL_SWITCH = os.getenv("ENABLE_AUTO_KILL_SWITCH", "true").lower() in ("1","true","yes")
-MAX_DAILY_LOSS_USD = float(os.getenv("MAX_DAILY_LOSS_USD", "7.50"))  # 3 trades × $2.50 = $7.50 max
+MAX_DAILY_LOSS_USD = float(os.getenv("MAX_DAILY_LOSS_USD", "15.00"))  # 3 trades × $5 = $15 max
 
 # Futures sizing helpers (optional; used only for P&L estimates on Render)
-POINT_VALUE_USD = float(os.getenv("POINT_VALUE_USD", "5.0"))  # MBT = $5/point
+POINT_VALUE_USD = float(os.getenv("POINT_VALUE_USD", "0.10"))  # MBT = $0.10/point (Micro Bitcoin)
 
 # DB
 DB_PATH = os.getenv("DB_PATH", "bot.db")
