@@ -175,11 +175,17 @@ def poll(machineId: str, symbol: str = "MBT", _=Depends(require_api_key)):
     # Always write fingerprint (even FLAT)
     fp_strat = _strategy_for_fp()
     try:
-        fp = build_fingerprint(machineId, symbol, frames, fp_strat, signal, stop_price, reason)
+        decision_id = db.new_decision_id()
+        fp = build_fingerprint(
+            machineId, symbol, frames, fp_strat, signal, stop_price, reason,
+            decision_id=decision_id,
+            mode=st.mode,
+            timeframe="5m"
+        )
         db.insert_fingerprint(**fp)
-    except Exception:
+    except Exception as e:
         # never block /poll on fingerprint logging
-        pass
+        print(f"FP_ERR: {e}")
 
     STORE.set_decision(signal, stop_price, reason)
 
