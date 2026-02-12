@@ -245,3 +245,10 @@ def reset_kill_switch(machineId: str, _=Depends(require_api_key)):
     STORE.set_kill_triggered(machineId, False)
     STORE.reset_consecutive_losses(machineId)
     return {"ok": True, "message": f"Kill switch reset for {machineId}"}
+
+
+@router.get("/fingerprints")
+def get_fingerprints(machineId: str, limit: int = 200):
+    """Get last N fingerprints - no auth required like /poll"""
+    fps = db.get_fingerprints(limit)
+    return {"count": len(fps), "fingerprints": fps}
