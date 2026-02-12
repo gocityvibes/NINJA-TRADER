@@ -252,3 +252,9 @@ def get_fingerprints(machineId: str, limit: int = 200):
     """Get last N fingerprints - no auth required like /poll"""
     fps = db.get_fingerprints(limit)
     return {"count": len(fps), "fingerprints": fps}
+
+
+@router.get("/trade-log")
+def trade_log(machineId: str, limit: int = 50):
+    """Get fill/trade history - no auth required like /poll"""
+    return {"fills": db.get_fills(limit)}
