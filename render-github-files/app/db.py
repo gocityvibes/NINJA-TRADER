@@ -406,22 +406,29 @@ def insert_fingerprint(**fp):
             )
             conn.commit()
 
-def get_fingerprints(limit: int = 200):
+# -------------------------
+# PATCHED: machine_id filtering added (everything else frozen)
+# -------------------------
+def get_fingerprints(machine_id: str, limit: int = 200):
     with db_conn() as conn:
         if _is_postgres():
             rows = _exec(
                 conn,
                 """SELECT ts_utc,machine_id,symbol,signal,stop_price,reason,pamm_score,direction,close,atr,adx,relvol,rsi14,macdh,
                           COALESCE(decision_id,''), COALESCE(mode,''), COALESCE(timeframe,'')
-                   FROM fingerprints ORDER BY id DESC LIMIT %s""",
-                (limit,),
+                   FROM fingerprints
+                   WHERE machine_id = %s
+                   ORDER BY id DESC LIMIT %s""",
+                (machine_id, limit),
             ).fetchall()
         else:
             rows = conn.execute(
                 """SELECT ts_utc,machine_id,symbol,signal,stop_price,reason,pamm_score,direction,close,atr,adx,relvol,rsi14,macdh,
                           COALESCE(decision_id,''), COALESCE(mode,''), COALESCE(timeframe,'')
-                   FROM fingerprints ORDER BY id DESC LIMIT ?""",
-                (limit,),
+                   FROM fingerprints
+                   WHERE machine_id = ?
+                   ORDER BY id DESC LIMIT ?""",
+                (machine_id, limit),
             ).fetchall()
     return [
         {
