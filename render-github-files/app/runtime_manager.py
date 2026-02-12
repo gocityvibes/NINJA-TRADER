@@ -10,7 +10,6 @@ from .state import STORE, PositionState
 from .config import (
     PAMM_MIN, PAMM_MAX, USE_VWAP, USE_REGIME_FILTER, USE_CANDLE_PATTERNS, USE_MULTI_TF_MACD,
     ATR_STOP_MULT, ATR_TARGET_MULT,
-    REL_VOL_MIN, REL_VOL_MAX,
     RUNTIME_MANAGER_ENABLED,
     EARLY_EXIT_PAMM, REVERSAL_PAMM_THRESHOLD,
     TRAIL_L1_PNL_PTS, TRAIL_L1_OFFSET_PTS,
@@ -41,8 +40,6 @@ def _make_strategy() -> Strategy:
         use_multi_tf_macd=USE_MULTI_TF_MACD,
         atr_stop_mult=ATR_STOP_MULT,
         atr_target_mult=ATR_TARGET_MULT,
-        rel_vol_min=REL_VOL_MIN,
-        rel_vol_max=REL_VOL_MAX,
     )
 
 
@@ -66,46 +63,43 @@ def _pnl_points(pos: PositionState, price: float) -> float:
 def _calc_trailing_stop(pos: PositionState, price: float) -> Tuple[float, str] | Tuple[None, str]:
     """Return (new_stop, ladder_reason) or (None, reason) if no update.
     
-    NEW TRAILING LADDER:
-    +150 pts → stop at +50   (100 pts trail)
-    +200 pts → stop at +100  (100 pts trail)
-    +300 pts → stop at +150  (150 pts trail)
-    After +300 pts → always trail 150 pts behind current price
+    Ladder Stop Specification:
+    +150 pts → stop at +50  (100 pts trail)
+    +200 pts → stop at +100 (100 pts trail)
+    +300 pts → stop at +150 (150 pts trail)
+    +300+    → trails 150 pts behind price
     """
     pnl_pts = _pnl_points(pos, price)
+    d = _position_dir(pos)
 
     # No trailing until +150 pts
     if pnl_pts < 150.0:
         return None, f"NO_TRAIL_YET pnl_pts={pnl_pts:.2f}"
 
-    # Pick ladder offset based on gain
+    # Determine stop level based on profit
     if 150.0 <= pnl_pts < 200.0:
-        # +150 → stop at +50 (trail 100 pts)
-        offset = 100.0
-        lvl = "L1"
+        # Lock in +50 pts profit
+        stop_level = pos.entry_price + (50.0 * d)
+        lvl = "L1_150"
     elif 200.0 <= pnl_pts < 300.0:
-        # +200 → stop at +100 (trail 100 pts)
-        offset = 100.0
-        lvl = "L2"
+        # Lock in +100 pts profit
+        stop_level = pos.entry_price + (100.0 * d)
+        lvl = "L2_200"
     else:  # >= 300.0
-        # +300+ → stop at +150+ (trail 150 pts constantly)
-        offset = 150.0
-        lvl = "L3"
-
-    d = _position_dir(pos)
-    # Trail behind current price by offset
-    candidate = price - (offset * d)
+        # Trail 150 pts behind current price
+        stop_level = price - (150.0 * d)
+        lvl = "L3_300_TRAIL"
 
     # For longs, stop can only move up; for shorts, only move down
     if pos.stop_price > 0:
         if d == 1:
-            candidate = max(candidate, pos.stop_price)
+            stop_level = max(stop_level, pos.stop_price)
         else:
-            candidate = min(candidate, pos.stop_price)
+            stop_level = min(stop_level, pos.stop_price)
 
     # Require minimum move before updating
     if pos.stop_price > 0:
-        move = abs(candidate - pos.stop_price)
+        move = abs(stop_level - pos.stop_price)
         if move < MIN_STOP_MOVE_PTS:
             return None, f"TRAIL_{lvl}_SKIP small_move={move:.4f}"
 
@@ -113,7 +107,7 @@ def _calc_trailing_stop(pos: PositionState, price: float) -> Tuple[float, str] |
         if move > MAX_STOP_TIGHTEN_PER_POLL_PTS:
             return None, f"TRAIL_{lvl}_SKIP huge_move={move:.2f}"
 
-    return float(candidate), f"TRAIL_{lvl} offset_pts={offset} pnl_pts={pnl_pts:.2f}"
+    return float(stop_level), f"TRAIL_{lvl} pnl_pts={pnl_pts:.2f}"
 
 
 def decide_with_runtime(machine_id: str, symbol: str) -> Tuple[RuntimeDecision, Dict]:
@@ -146,10 +140,9 @@ def decide_with_runtime(machine_id: str, symbol: str) -> Tuple[RuntimeDecision, 
 
         price = float(frames["df5"].iloc[-1]["close"])
         direction = 1 if sig.side == "buy" else -1
-        # FIXED 50-POINT HARD STOP
-        # For LONG: stop is 50 points BELOW entry (price - 50)
-        # For SHORT: stop is 50 points ABOVE entry (price + 50)
-        stop_loss = price + (50.0 * -direction)  # Flip direction for stop placement
+        stop_loss, _target = strat.get_atr_stops_targets(frames, entry_price=price, direction=direction)
+        if stop_loss is None:
+            return RuntimeDecision("FLAT", 0.0, "ATR_INVALID_BLOCKING_TRADE", {"runtime": False}), frames
 
         return RuntimeDecision("LONG" if sig.side == "buy" else "SHORT", float(stop_loss), sig.reason, {"runtime": False}), frames
 
@@ -192,10 +185,9 @@ def decide_with_runtime(machine_id: str, symbol: str) -> Tuple[RuntimeDecision, 
             return RuntimeDecision("FLAT", 0.0, sig.reason, {"runtime": True, "pamm": compute_pamm_now(strat, frames)}), frames
 
         direction = 1 if sig.side == "buy" else -1
-        # FIXED 50-POINT HARD STOP
-        # For LONG: stop is 50 points BELOW entry (price - 50)
-        # For SHORT: stop is 50 points ABOVE entry (price + 50)
-        stop_loss = price + (50.0 * -direction)  # Flip direction for stop placement
+        stop_loss, _target = strat.get_atr_stops_targets(frames, entry_price=price, direction=direction)
+        if stop_loss is None:
+            return RuntimeDecision("FLAT", 0.0, "ATR_INVALID_BLOCKING_TRADE", {"runtime": True}), frames
 
         # Save suggested position state (will be confirmed by fill)
         pos.side = "long" if sig.side == "buy" else "short"
@@ -220,8 +212,12 @@ def decide_with_runtime(machine_id: str, symbol: str) -> Tuple[RuntimeDecision, 
     meta["pnl_pts"] = _pnl_points(pos, price)
     meta["pnl_usd_est"] = meta["pnl_pts"] * float(POINT_VALUE_USD) * float(pos.qty or 1.0)
 
-    # REMOVED: Catastrophic single-trade loss check (was too aggressive)
-    # Only use 3-loss rule and daily max loss instead
+    # 0) Catastrophic single-trade loss check (ANY trade -$5.00 → kill immediately)
+    if meta["pnl_usd_est"] <= -5.00:
+        pos.open = False
+        STORE.set_position(machine_id, symbol, pos)
+        STORE.set_kill_triggered(machine_id, True)
+        return RuntimeDecision("FLAT", 0.0, f"KILL_SWITCH_SINGLE_LOSS pnl=${meta['pnl_usd_est']:.2f}", meta), frames
 
     # 1) Stop hit detection (best-effort; Ninja's server-side stop should still be primary)
     # 1) Stop hit detection (best-effort; Ninja's server-side stop is primary)
@@ -233,12 +229,12 @@ def decide_with_runtime(machine_id: str, symbol: str) -> Tuple[RuntimeDecision, 
             STORE.set_position(machine_id, symbol, pos)
             return RuntimeDecision("FLAT", 0.0, f"STOP_HIT_RENDER price={price:.2f} stop={pos.stop_price:.2f}", meta), frames
 
-    # 2) PAMM-based EARLY EXIT (ONLY before +150 pts)
-    # After +150 pts, PAMM is IGNORED (strong trends have PAMM dips)
+    # 2) PAMM-based EARLY EXIT (ONLY before +50 pts - PF booster)
+    # After +50 pts, PAMM is IGNORED (strong trends have PAMM dips)
     pamm_now = compute_pamm_now(strat, frames)
     meta["pamm"] = pamm_now
     
-    if meta["pnl_pts"] < 150.0:  # Only check PAMM before +150 pts
+    if meta["pnl_pts"] < 150.0:  # Only check PAMM before +150 pts (ladder activation)
         # Rule 1: PAMM failed to reach 90 within 4 bars (20 minutes on 5m)
         bars_in_trade = 0
         if pos.entry_time_utc:
