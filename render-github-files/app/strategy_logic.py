@@ -36,18 +36,17 @@ class Strategy:
     def __init__(self, 
                  pamm_min: float,
                  pamm_max: float, 
-                 adx_min: float = 0.0,  # Set to 0 to disable ADX filter
-                 rel_vol_min: float = 0.0,  # Set to 0 to disable volume filter
-                 rel_vol_max: float = 999.0,
-                 rsi_long_min: float = 0.0,  # Set to 0 to disable RSI filter
-                 rsi_short_max: float = 100.0,  # Set to 100 to disable RSI filter
-                 use_vwap: bool = False,
-                 use_regime_filter: bool = False,
-                 use_candle_patterns: bool = False,
-                 use_multi_tf_macd: bool = False,
+                 adx_min: float = 22.0,  # Increased from 18 to 22
+                 rel_vol_min: float = 1.2,  # Increased from 1.1 to 1.2
+                 rel_vol_max: float = 2.0,
+                 rsi_long_min: float = 52.0,
+                 rsi_short_max: float = 48.0,
+                 use_vwap: bool = True,
+                 use_regime_filter: bool = True,
+                 use_candle_patterns: bool = True,
+                 use_multi_tf_macd: bool = True,
                  atr_stop_mult: float = 2.0,  # ATR multiplier for stops
-                 atr_target_mult: float = 3.0,  # ATR multiplier for targets
-                 point_value_usd: float = 0.0):  # USD per 1.0 point (optional)
+                 atr_target_mult: float = 3.0):  # ATR multiplier for targets
         self.pamm_min = pamm_min
         self.pamm_max = pamm_max
         self.adx_min = adx_min
@@ -63,7 +62,6 @@ class Strategy:
         # ATR-based risk management
         self.atr_stop_mult = atr_stop_mult
         self.atr_target_mult = atr_target_mult
-        self.point_value_usd = float(point_value_usd)
 
     def _prep(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate all technical indicators"""
@@ -427,13 +425,12 @@ class Strategy:
     
     def get_atr_stops_targets(self, frames: Dict[str, pd.DataFrame], 
                               entry_price: float, direction: int) -> Tuple[float, float]:
-        """Calculate ATR-based stop loss and target with safety guards.
+        """Calculate fixed 50-point stop loss and ATR-based target.
 
         Rules:
-        - Skip trades where ATR <= 0 or NaN
-        - Block initial_atr = 0
-        - Prevent stop = entry
-        - Prevent zero-ATR stop/target
+        - Fixed 50-point stop loss for both LONG and SHORT
+        - ATR-based target (unchanged)
+        - Skip trades where ATR <= 0 or NaN for target calculation
         """
         f5 = self._prep(frames["df5"])
         atr_series = f5.get("atr")
@@ -446,17 +443,18 @@ class Strategy:
         except Exception:
             return None, None
 
-        # Guard: ATR must be positive and finite
+        # Guard: ATR must be positive and finite for target calculation
         if not np.isfinite(current_atr) or current_atr <= 0:
             return None, None
 
+        # Fixed 50-point stop loss
         if direction == 1:
-            # Long position
-            stop_loss = entry_price - (current_atr * self.atr_stop_mult)
+            # Long position: stop 50 points below entry
+            stop_loss = entry_price - 50.0
             target = entry_price + (current_atr * self.atr_target_mult)
         else:
-            # Short position (EXACT MIRROR)
-            stop_loss = entry_price + (current_atr * self.atr_stop_mult)
+            # Short position: stop 50 points above entry
+            stop_loss = entry_price + 50.0
             target = entry_price - (current_atr * self.atr_target_mult)
 
         # Final guard: avoid degenerate levels equal to entry
