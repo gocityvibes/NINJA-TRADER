@@ -33,7 +33,11 @@ def build_fingerprint(
     f1 = strat._prep(frames["df1"])
     f5 = strat._prep(frames["df5"])
     f15 = strat._prep(frames["df15"])
-    df30 = frames.get("df30") or frames.get("df15")  # fallback if NO30_60
+
+    # FIX: do NOT use `or` with DataFrames (ambiguous truth value)
+    df30 = frames.get("df30")
+    if df30 is None or getattr(df30, "empty", True):
+        df30 = frames.get("df15")
     f30 = strat._prep(df30)
 
     row5 = f5.iloc[-1]
