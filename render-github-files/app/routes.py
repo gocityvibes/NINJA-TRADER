@@ -256,7 +256,7 @@ def reset_kill_switch(machineId: str, _=Depends(require_api_key)):
 @router.get("/fingerprints")
 def get_fingerprints(machineId: str, limit: int = 200):
     """Get last N fingerprints - no auth required like /poll"""
-    fps = db.get_fingerprints(limit)
+    fps = db.get_fingerprints(machineId, limit)
     return {"count": len(fps), "fingerprints": fps}
 
 
