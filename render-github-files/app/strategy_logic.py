@@ -80,7 +80,6 @@ class Strategy:
         out["ADX"] = adx(out["high"], out["low"], out["close"], 14)
         out["vwap"] = vwap(out)
         out["relvol"] = rel_volume(out["volume"], 20)
-        out["atr"] = atr(out["high"], out["low"], out["close"], 14)  # For dynamic stops
         
         return out
 
@@ -425,41 +424,20 @@ class Strategy:
     
     def get_atr_stops_targets(self, frames: Dict[str, pd.DataFrame], 
                               entry_price: float, direction: int) -> Tuple[float, float]:
-        """Calculate fixed 50-point stop loss and ATR-based target.
+        """Calculate fixed 50-point stop loss. No target - ladder stops handle exits.
 
         Rules:
         - Fixed 50-point stop loss for both LONG and SHORT
-        - ATR-based target (unchanged)
-        - Skip trades where ATR <= 0 or NaN for target calculation
+        - No profit target (ladder stops manage exits)
         """
-        f5 = self._prep(frames["df5"])
-        atr_series = f5.get("atr")
-
-        if atr_series is None or len(atr_series) == 0:
-            return None, None
-
-        try:
-            current_atr = float(atr_series.iloc[-1])
-        except Exception:
-            return None, None
-
-        # Guard: ATR must be positive and finite for target calculation
-        if not np.isfinite(current_atr) or current_atr <= 0:
-            return None, None
-
         # Fixed 50-point stop loss
         if direction == 1:
             # Long position: stop 50 points below entry
             stop_loss = entry_price - 50.0
-            target = entry_price + (current_atr * self.atr_target_mult)
         else:
             # Short position: stop 50 points above entry
             stop_loss = entry_price + 50.0
-            target = entry_price - (current_atr * self.atr_target_mult)
 
-        # Final guard: avoid degenerate levels equal to entry
-        if stop_loss == entry_price or target == entry_price:
-            return None, None
-
-        return stop_loss, target
+        # No target - return 0 (ladder stops handle profit-taking)
+        return stop_loss, 0.0
 
